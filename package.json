@@ -1,0 +1,17 @@
+{
+  "name": "aemjsonparser",
+  "version": "1.0.0",
+  "description": "",
+  "main": "index.js",
+  "scripts": {},
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "cheerio": "^1.0.0-rc.3",
+    "crawler": "^1.2.1",
+    "decode-html": "^2.0.0",
+    "query-string": "^6.8.3",
+    "request": "^2.88.0",
+    "require": "^2.4.20"
+  }
+}
