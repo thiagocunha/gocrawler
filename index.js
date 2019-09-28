@@ -13,7 +13,7 @@ function execRequests(r, fulldomain, body, listaNormal, listaErro, callback){
             item = fulldomain + item;
         }
         if (item.startsWith("http") && !listaNormal.includes(item)&& !listaErro.includes(item)){
-            listaNormal.push(item);
+            //listaNormal.push(item);
             //console.log(item);
             recReq(item, listaNormal, listaErro, function(listaNormal, listaErro){
                 execRequests(r, fulldomain, body, listaNormal, listaErro, callback);
@@ -32,33 +32,47 @@ function execRequests(r, fulldomain, body, listaNormal, listaErro, callback){
 function recReq(url, listaNormal, listaErro, cb){
     var options = {
         uri: url,
-        transform: function (body) {
+        /*transform: function (body) {
             return cheerio.load(body);
-        }
+        }*/
     };
     
     rp(options, function (a, response, body){
         //console.log("Url: "+url);
         //console.log(".");
-        //console.log(response);
+        console.log(response.request.uri.href);
 
         //console.log(response.statusCode);
         if (parseInt(response.statusCode) !== 200)
         {
             //console.log("erro: "+ response.statusCode);
-            listaErro.push(url);
-            listaNormal.pop();
-        }
-        let domain = /\/\/(?:www.)?(.*?)(?:\/|"|')/.exec(url)[1];
-        let fulldomain = /(http.?:\/\/(?:www.)?.*?)(?:\/|"|')/.exec(url)[1];
-        
-        let r = new RegExp("(?:\"|')((?:http.*?(?:"+domain+")|\\/)(?:[^.'\",\\s<>])*?(?:.html|\/|(?:[^.'\",\\s<>]{4,})))(?:\"|')", "gm");
+            listaErro.push(url);        
 
-        execRequests(r, fulldomain, body, listaNormal, listaErro, function(listaNormal, listaErro){
-            console.log("URL checked");
             if (cb)
                 cb(listaNormal, listaErro, url);
-        });
+    
+        }
+        else{
+
+            if (!listaNormal.includes(response.request.uri.href)){
+                listaNormal.push(response.request.uri.href);
+
+                let domain = /\/\/(?:www.)?(.*?)(?:\/|"|')/.exec(url)[1];
+                let fulldomain = /(http.?:\/\/(?:www.)?.*?)(?:\/|"|')/.exec(url)[1];
+                
+                let r = new RegExp("(?:\"|')((?:http.*?(?:"+domain+")|\\/)(?:[^.'\",\\s<>])*?(?:.html|\/|(?:[^.'\",\\s<>]{4,})))(?:\"|')", "gm");
+        
+                execRequests(r, fulldomain, body, listaNormal, listaErro, function(listaNormal, listaErro){
+                    console.log("URL checked");
+                    if (cb)
+                        cb(listaNormal, listaErro, url);
+                });
+            }
+            else{
+                if (cb)
+                        cb(listaNormal, listaErro, url);
+            }
+        }
         
     });
 }
