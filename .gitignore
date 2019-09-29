@@ -2,5 +2,6 @@ node_modules
 execs
 bkp
 cache
+*.csv
 .~lock.urls.ods#
 .~lock.urls.csv#

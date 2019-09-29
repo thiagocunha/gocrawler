@@ -1,13 +1,13 @@
-var Crawler = require("crawler");
 var rp = require('request');
-var cheerio = require('cheerio'); // Basically jQuery for node.js
+const path = require('path');
+const fs = require('fs');
 
 var listaNormal = [];
 var listaEstendida = [];
-var listaExecutados = [];
 var listaErrosGerais = [];
+var listaURLsUnicas = [];
 var listaErro = [];
-var cache = {};
+const regexFullDomain = /(?:(http.?:\/\/(?:www.)?.*?)(?:\/|"|')|(http.?:\/\/(?:www.)?.*?$))/;
 
 function normalizaUrl(url){
     return url.replace(/[\\\/\*\.\?\:\<\>\|\'\"]/ig, "");
@@ -19,8 +19,6 @@ function cachedRequest(options, callback){
         callback();
     }
     else{
-        const path = require('path');
-        const fs = require('fs');
         let arqCache = path.join(__dirname, "cache", chave);
         
         if (fs.existsSync(arqCache) && fs.statSync(arqCache).size>0){
@@ -30,42 +28,56 @@ function cachedRequest(options, callback){
         else{
             rp(options, function(a, response, body){
                 if (response && parseInt(response.statusCode) == 200)
-                {
+                {                    
                     fs.writeFile(arqCache, JSON.stringify(response), function(){
                         console.info(arqCache+" criado");
                     });     
-                    callback(a, response, body);               
                 }
                 else{
                     listaErrosGerais.push(chave);
-                    callback();
                 }
+                callback(a, response, body);
+
             });
         }
     }
 }
 
-function execRequests(r, fulldomain, body, listaNormal, listaErro, callback){
+/**
+ * Executa a varredura no corpo de uma página buscando links 
+ * através de uma expressão regular. Cada novo link é encontrado
+ * por meio de uma chamada recursiva passando o mesmo objeto RegExp
+ * recebido na chamada anterior 
+ * @param {RegExp} r Objeto RegExp que funciona como um cursor para cada link econtrado na página
+ * @param {String} fulldomain URL do domínio
+ * @param {String} reqReferer Referer da URL atual
+ * @param {String} siteOriginal Primeira URL que original essa sequência de chamadas
+ * @param {Object} body Corpo da página atual
+ * @param {Array} listaNormal 
+ * @param {Array} listaErro 
+ * @param {Function} callback 
+ */
+function execRequests(r, fulldomain, reqReferer, siteOriginal, body, listaNormal, listaErro, callback){
     if ((result = r.exec(body)) !== null) {
+        // URL com decodificação (algumas URLs vinham com parte codificada)
         let item = decodeURIComponent(result[1]);
+        // URL em formato minúsculo e sem barra no final
         let itemLower = item.toLowerCase().replace(/\/$/, "");
-        //console.log(item);
+        
+        // Se o caminho é relativo, transforma em absoluto
         if (item.startsWith("/")){
             item = fulldomain + item;
         }
-        if (item.startsWith("http") && !listaExecutados.includes(itemLower)&& !listaNormal.includes(item)&& !listaErro.includes(item)){
-            listaExecutados.push(itemLower);
+        if (item.startsWith("http") &&  !listaNormal.includes(item)&& !listaErro.includes(item)){
 
-            //listaNormal.push(item);
-            //console.log(item);
             setTimeout( function() {
-                recReq(item, listaNormal, listaErro, function(listaNormal, listaErro){
-                    execRequests(r, fulldomain, body, listaNormal, listaErro, callback);
+                recReq(item, siteOriginal, reqReferer, listaNormal, listaErro, function(listaNormal, listaErro){
+                    execRequests(r, fulldomain, reqReferer, siteOriginal, body, listaNormal, listaErro, callback);
                 });            
             });
         }
         else{
-            execRequests(r, fulldomain, body, listaNormal, listaErro, callback);
+            execRequests(r, fulldomain, reqReferer, siteOriginal, body, listaNormal, listaErro, callback);
         }        
         
     }
@@ -74,7 +86,14 @@ function execRequests(r, fulldomain, body, listaNormal, listaErro, callback){
     }
 }
 
-function recReq(url, listaNormal, listaErro, cb){
+function conteudosDescartados(response, urlFinal){
+    if (!response) 
+        return false;
+    else
+        return (!(response.headers["content-type"].includes("text")|| response.headers["content-type"].includes("json")) || urlFinal.includes("linkedin.com")  || urlFinal.includes("sharer.php") || urlFinal.includes("twitter.com") || urlFinal.includes("facebook.com") || urlFinal.includes("loja.cocacolabrasil")|| urlFinal.includes("merakettim.coca-colaturkiye.com"))
+}
+
+function recReq(url, siteOriginal, referer, listaNormal, listaErro, cb){
     var options = {
         uri: url,
         /*transform: function (body) {
@@ -82,6 +101,38 @@ function recReq(url, listaNormal, listaErro, cb){
         }*/
     };
     
+    if (url.includes("season05") && url.includes(".ke")){
+        url.toString();
+    }
+
+    if (url.includes("jcr:") && url.includes("contentwall")){
+        options.method = "POST";
+        options.uri = (regexFullDomain.exec(url)[1]?regexFullDomain.exec(url)[1]:regexFullDomain.exec(url)[2]).replace("http:", "https:") + "/bin/goservices/contentWallServlet";
+                
+        options.form = "nodePath="+/(\/content.*$)/.exec(url)[1];//+"&actualAmountOfRSSItems=%5B%5D&sortField=%40cq%3AlastModified&sortOrder=desc";
+        /*postData = {
+            mimeType: 'application/x-www-form-urlencoded',
+            params: [
+              {
+                name: 'nodePath',
+                value: /(\/content.*$)/.exec(url) //'/content/go/coca-cola/AZ/az/bilirsinizmi/jcr:content/pageContent/contentwall_2013369960'
+              },
+              {
+                name: 'actualAmountOfRSSItems',
+                value: []
+              },
+              {
+                name: 'sortField',
+                value: '@cq:lastModified'
+              },
+              {
+                name: 'sortOrder',
+                value: 'desc'
+              }
+            ]
+          }*/
+    }
+
     cachedRequest(options, function (a, response, body){
         console.log("Url: "+url);
         //console.log(".");
@@ -91,7 +142,7 @@ function recReq(url, listaNormal, listaErro, cb){
             urlFinal = response.request.uri.href;
 
         let match = /(?:\/\/(?:www.)?(.*?)(?:\/|"|')|\/\/(?:www.)?(.*?)$)/.exec(url);
-        let matchFull = /(?:(http.?:\/\/(?:www.)?.*?)(?:\/|"|')|(http.?:\/\/(?:www.)?.*?$))/.exec(url);
+        let matchFull = regexFullDomain.exec(url);
         let domain = "nothing";
         let fulldomain = "nothing";
         if (match[1]){
@@ -104,7 +155,7 @@ function recReq(url, listaNormal, listaErro, cb){
         }
         
         //console.log(response.statusCode);
-        if (!response || parseInt(response.statusCode) !== 200 || !response.headers["content-type"].includes("text") || urlFinal.includes("linkedin.com")  || urlFinal.includes("sharer.php") || urlFinal.includes("twitter.com") || urlFinal.includes("facebook.com") || urlFinal.includes("loja.cocacolabrasil")|| urlFinal.includes("merakettim.coca-colaturkiye.com"))
+        if (!response || parseInt(response.statusCode) !== 200 || conteudosDescartados(response, urlFinal))
         {
             //console.log("erro: "+ response.statusCode);
             if (!listaErro.includes(urlFinal)){
@@ -112,7 +163,8 @@ function recReq(url, listaNormal, listaErro, cb){
                 let tempStatus = "";
                 if (response)
                     tempStatus = response.statusCode;
-                listaEstendida.push({original: url, final: urlFinal, dominio: domain, dominioCompleto: fulldomain, statusCode: tempStatus, sucesso: true});
+                if (!conteudosDescartados(response, urlFinal))
+                    listaEstendida.push({siteOriginal: siteOriginal, referer: referer, original: url, final: urlFinal, dominio: domain, dominioCompleto: fulldomain, statusCode: tempStatus, sucesso: false});
             }
 
             if (cb)
@@ -122,17 +174,15 @@ function recReq(url, listaNormal, listaErro, cb){
         else{
 
             if (!listaNormal.includes(urlFinal)){
-                
-                
-
-                
-                
                 if (urlFinal.includes(domain)){
+                    if (response.headers["content-type"].includes("json")){
+                        body = body;
+                    }
                     listaNormal.push(urlFinal);
-                    listaEstendida.push({original: url, final: urlFinal, dominio: domain, dominioCompleto: fulldomain, statusCode: response.statusCode, sucesso: true});
+                    listaEstendida.push({siteOriginal: siteOriginal, referer: referer, original: url, final: urlFinal, dominio: domain, dominioCompleto: fulldomain, statusCode: response.statusCode, sucesso: true});
                     let r = new RegExp("(?:\"|')((?:http.{3,4}(?:"+domain+")|\\/)(?:[^.'\",\\s<>])*?(?:.html|\/|(?:[^.'\",\\s<>]{4,})))(?:\"|')", "gm");
         
-                    execRequests(r, fulldomain, body, listaNormal, listaErro, function(listaNormal, listaErro){
+                    execRequests(r, fulldomain, urlFinal, siteOriginal, body, listaNormal, listaErro, function(listaNormal, listaErro){
                         console.log("URL checked");
                         if (cb)
                             cb(listaNormal, listaErro, url);
@@ -507,13 +557,12 @@ var allSites = ["www.aguamineralcrystal.com.br/pt/home/",
     
 function processaSite(allSites, indice){
 
-    const path = require('path');
-    const fs = require('fs');
-    
+    /*
     listaErro = [];
     listaNormal = [];
     listaEstendida = [];
     listaExecutados = [];
+*/
 
     let site = allSites[indice];
     let arqSite = path.join(__dirname, "urls_"+indice+".csv");
@@ -523,32 +572,47 @@ function processaSite(allSites, indice){
         if (!site.includes("http")){
             site = "http://"+site;
         }
-        recReq(site, listaNormal, listaErro, function (l1, l2, url){
-            var stream = fs.createWriteStream(arqSite);
-            stream.once('open', function(fd) {
-            
+        recReq(site, site, "", listaNormal, listaErro, function (l1, l2, url){
+            //if (indice>339)
+            {
+                var stream = fs.createWriteStream(arqSite);
+                stream.once('open', function(fd) {
                 
-                console.log("finalizando");
-                //l1.sort();
-                //l2.sort();
+                    
+                    console.log("finalizando");
+                    //l1.sort();
+                    //l2.sort();
 
-                listaEstendida.forEach(function(item){
-                    stream.write("'"+ item.final + "', '" + item.original +"', '"+item.dominio+"', '"+item.dominioCompleto+"', '"+item.final.replace(item.dominioCompleto, "")+"', '"+item.statusCode+"', '"+item.sucesso+"'\n");
-                    //console.log(item);
+                    listaEstendida.forEach(function(item){
+                        stream.write("'"+ item.final.replace(/\/$/, "") + "', '" + item.original +"', '"+item.dominio+"', '"+item.dominioCompleto+"', '"+item.final.replace(item.dominioCompleto, "")+"', '"+item.statusCode+"', '"+item.sucesso+"', '"+item.referer+"', '"+item.siteOriginal+"'\n");
+                        //console.log(item);
+                        if (!listaURLsUnicas.includes(item.urlFinal)){
+                            listaURLsUnicas.push(item.urlFinal);
+                        }
+                    });
+                    console.log("");
+
+                    stream.end();
+
+
+                    if (indice<allSites.length-1)
+                        processaSite(allSites, indice+1);                
                 });
-                console.log("");
-
-                stream.end();
+            }
+            /*else{
 
                 if (indice<allSites.length-1)
                     processaSite(allSites, indice+1);
-            });
+            }*/
+
         });
     }
     else if (indice<allSites.length-1){
         console.log("SKIPPING " + site);
         processaSite(allSites, indice+1);
     }
+    
 }
 
 processaSite(allSites, 0);
+//fs.writeFileSync(path.join(__dirname, "urls_unicas.csv"), listaURLsUnicas.join("\n"));
