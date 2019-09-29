@@ -1,3 +1,6 @@
 node_modules
+execs
+bkp
+cache
 .~lock.urls.ods#
 .~lock.urls.csv#

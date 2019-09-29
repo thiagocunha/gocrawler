@@ -3,21 +3,66 @@ var rp = require('request');
 var cheerio = require('cheerio'); // Basically jQuery for node.js
 
 var listaNormal = [];
+var listaEstendida = [];
+var listaExecutados = [];
+var listaErrosGerais = [];
 var listaErro = [];
+var cache = {};
+
+function normalizaUrl(url){
+    return url.replace(/[\\\/\*\.\?\:\<\>\|\'\"]/ig, "");
+}
+function cachedRequest(options, callback){
+    let chave = normalizaUrl(options.uri);
+    if (listaErrosGerais.includes(chave))
+    {
+        callback();
+    }
+    else{
+        const path = require('path');
+        const fs = require('fs');
+        let arqCache = path.join(__dirname, "cache", chave);
+        
+        if (fs.existsSync(arqCache) && fs.statSync(arqCache).size>0){
+            let response = JSON.parse(fs.readFileSync(arqCache));
+            callback({}, response, response.body);
+        }
+        else{
+            rp(options, function(a, response, body){
+                if (response && parseInt(response.statusCode) == 200)
+                {
+                    fs.writeFile(arqCache, JSON.stringify(response), function(){
+                        console.info(arqCache+" criado");
+                    });     
+                    callback(a, response, body);               
+                }
+                else{
+                    listaErrosGerais.push(chave);
+                    callback();
+                }
+            });
+        }
+    }
+}
 
 function execRequests(r, fulldomain, body, listaNormal, listaErro, callback){
     if ((result = r.exec(body)) !== null) {
         let item = decodeURIComponent(result[1]);
+        let itemLower = item.toLowerCase().replace(/\/$/, "");
         //console.log(item);
         if (item.startsWith("/")){
             item = fulldomain + item;
         }
-        if (item.startsWith("http") && !listaNormal.includes(item)&& !listaErro.includes(item)){
+        if (item.startsWith("http") && !listaExecutados.includes(itemLower)&& !listaNormal.includes(item)&& !listaErro.includes(item)){
+            listaExecutados.push(itemLower);
+
             //listaNormal.push(item);
             //console.log(item);
-            recReq(item, listaNormal, listaErro, function(listaNormal, listaErro){
-                execRequests(r, fulldomain, body, listaNormal, listaErro, callback);
-            });            
+            setTimeout( function() {
+                recReq(item, listaNormal, listaErro, function(listaNormal, listaErro){
+                    execRequests(r, fulldomain, body, listaNormal, listaErro, callback);
+                });            
+            });
         }
         else{
             execRequests(r, fulldomain, body, listaNormal, listaErro, callback);
@@ -37,36 +82,66 @@ function recReq(url, listaNormal, listaErro, cb){
         }*/
     };
     
-    rp(options, function (a, response, body){
-        //console.log("Url: "+url);
+    cachedRequest(options, function (a, response, body){
+        console.log("Url: "+url);
         //console.log(".");
-        console.log(response.request.uri.href);
+        //console.log(response.request.uri.href);
+        let urlFinal = url;
+        if (response && response.request && response.request.uri && response.request.uri.href)
+            urlFinal = response.request.uri.href;
 
+        let match = /(?:\/\/(?:www.)?(.*?)(?:\/|"|')|\/\/(?:www.)?(.*?)$)/.exec(url);
+        let matchFull = /(?:(http.?:\/\/(?:www.)?.*?)(?:\/|"|')|(http.?:\/\/(?:www.)?.*?$))/.exec(url);
+        let domain = "nothing";
+        let fulldomain = "nothing";
+        if (match[1]){
+            domain = match[1]; 
+            fulldomain = matchFull[1];
+        }
+        else{
+            domain = match[2];
+            fulldomain = matchFull[2];
+        }
+        
         //console.log(response.statusCode);
-        if (parseInt(response.statusCode) !== 200)
+        if (!response || parseInt(response.statusCode) !== 200 || !response.headers["content-type"].includes("text") || urlFinal.includes("linkedin.com")  || urlFinal.includes("sharer.php") || urlFinal.includes("twitter.com") || urlFinal.includes("facebook.com") || urlFinal.includes("loja.cocacolabrasil")|| urlFinal.includes("merakettim.coca-colaturkiye.com"))
         {
             //console.log("erro: "+ response.statusCode);
-            listaErro.push(url);        
+            if (!listaErro.includes(urlFinal)){
+                listaErro.push(urlFinal);        
+                let tempStatus = "";
+                if (response)
+                    tempStatus = response.statusCode;
+                listaEstendida.push({original: url, final: urlFinal, dominio: domain, dominioCompleto: fulldomain, statusCode: tempStatus, sucesso: true});
+            }
 
             if (cb)
-                cb(listaNormal, listaErro, url);
+                cb(listaNormal, listaErro, urlFinal);
     
         }
         else{
 
-            if (!listaNormal.includes(response.request.uri.href)){
-                listaNormal.push(response.request.uri.href);
-
-                let domain = /\/\/(?:www.)?(.*?)(?:\/|"|')/.exec(url)[1];
-                let fulldomain = /(http.?:\/\/(?:www.)?.*?)(?:\/|"|')/.exec(url)[1];
+            if (!listaNormal.includes(urlFinal)){
                 
-                let r = new RegExp("(?:\"|')((?:http.*?(?:"+domain+")|\\/)(?:[^.'\",\\s<>])*?(?:.html|\/|(?:[^.'\",\\s<>]{4,})))(?:\"|')", "gm");
+                
+
+                
+                
+                if (urlFinal.includes(domain)){
+                    listaNormal.push(urlFinal);
+                    listaEstendida.push({original: url, final: urlFinal, dominio: domain, dominioCompleto: fulldomain, statusCode: response.statusCode, sucesso: true});
+                    let r = new RegExp("(?:\"|')((?:http.{3,4}(?:"+domain+")|\\/)(?:[^.'\",\\s<>])*?(?:.html|\/|(?:[^.'\",\\s<>]{4,})))(?:\"|')", "gm");
         
-                execRequests(r, fulldomain, body, listaNormal, listaErro, function(listaNormal, listaErro){
-                    console.log("URL checked");
+                    execRequests(r, fulldomain, body, listaNormal, listaErro, function(listaNormal, listaErro){
+                        console.log("URL checked");
+                        if (cb)
+                            cb(listaNormal, listaErro, url);
+                    });
+                }
+                else{
                     if (cb)
                         cb(listaNormal, listaErro, url);
-                });
+                }
             }
             else{
                 if (cb)
@@ -80,30 +155,6 @@ function recReq(url, listaNormal, listaErro, cb){
 //(?:"|')((?:http.*?(?:coca-cola.co.uk)|\/)(?:[^.'",\s<>])*?(?:.html|\/|(?:[^.'",\s<>]{4,})))(?:"|')
 //et domain = "cocacola.co.uk";
 //console.log(decodeURIComponent("http%3A%2F%2Fwww"))
-recReq('http://www.fantalatinamerica.com/es/home/', listaNormal, listaErro, function (l1, l2, url){
-    const path = require('path');
-    const fs = require('fs');
-    var stream = fs.createWriteStream(path.join(__dirname, "urls.csv"));
-    stream.once('open', function(fd) {
-    
-        
-        console.log("finalizando");
-        l1.sort();
-        l2.sort();
-
-        l1.forEach(function(item){
-            stream.write("'"+ item + "', '" + url +"', 'true'\n");
-            //console.log(item);
-        });
-        console.log("");
-        l2.forEach(function(item){
-            stream.write("'"+ item + "', '" + url +"', 'false'\n");
-            //console.log(item);
-        });
-
-        stream.end();
-    });
-});
 
 //http://www.fantalatinamerica.com/es/home/
 //https://www.cocacola.co.uk/en/home/
@@ -450,3 +501,54 @@ var allSites = ["www.aguamineralcrystal.com.br/pt/home/",
 "www.cocacola-kos.com/al/home",
 "www.cocacola-kos.com/sr/home",
 "www.coca-cola.it/smartwater"]
+
+//allSites = ["www.fuze-tea.com"];
+//allSites.forEach(
+    
+function processaSite(allSites, indice){
+
+    const path = require('path');
+    const fs = require('fs');
+    
+    listaErro = [];
+    listaNormal = [];
+    listaEstendida = [];
+    listaExecutados = [];
+
+    let site = allSites[indice];
+    let arqSite = path.join(__dirname, "urls_"+indice+".csv");
+
+    if (!fs.existsSync(arqSite)){
+        console.log("STARTING " + site);
+        if (!site.includes("http")){
+            site = "http://"+site;
+        }
+        recReq(site, listaNormal, listaErro, function (l1, l2, url){
+            var stream = fs.createWriteStream(arqSite);
+            stream.once('open', function(fd) {
+            
+                
+                console.log("finalizando");
+                //l1.sort();
+                //l2.sort();
+
+                listaEstendida.forEach(function(item){
+                    stream.write("'"+ item.final + "', '" + item.original +"', '"+item.dominio+"', '"+item.dominioCompleto+"', '"+item.final.replace(item.dominioCompleto, "")+"', '"+item.statusCode+"', '"+item.sucesso+"'\n");
+                    //console.log(item);
+                });
+                console.log("");
+
+                stream.end();
+
+                if (indice<allSites.length-1)
+                    processaSite(allSites, indice+1);
+            });
+        });
+    }
+    else if (indice<allSites.length-1){
+        console.log("SKIPPING " + site);
+        processaSite(allSites, indice+1);
+    }
+}
+
+processaSite(allSites, 0);
