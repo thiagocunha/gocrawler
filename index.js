@@ -121,7 +121,7 @@ function requisitarPagina(url, siteOriginal, referer, listaNormal, listaErro, cb
     var options = {
         uri: url
     };
-    
+
     // Se a URLs representa um metadado de componente contentwall... 
     if (url.includes("jcr:") && url.includes("contentwall")){
         options.method = "POST";
@@ -131,7 +131,6 @@ function requisitarPagina(url, siteOriginal, referer, listaNormal, listaErro, cb
 
     // Requisição web cacheada da página 
     cachedRequest(options, function (a, response, body){
-        // console.log("Url: "+url);
         let urlFinal = url;
 
         // Recuperação da URL depois dos redirects
@@ -566,72 +565,80 @@ function processaSite(allSites, indice){
             site = "http://"+site;
         }
         requisitarPagina(site, site, "", listaNormal, listaErro, function (l1, l2, url){
-            //if (indice>339)
-            {
-                var stream = fs.createWriteStream(arqSite);
-                stream.once('open', function(fd) {
-                
-                    
-                    console.log("finalizando " + indice);
+            var stream = fs.createWriteStream(arqSite);
+            stream.once('open', function(fd) {
+                console.log("finalizando " + indice);
 
-                    listaEstendida.forEach(function(item){
-                        stream.write("'"+ item.final.replace(/\/$/, "") + "', '" + item.original +"', '"+item.dominio+"', '"+item.dominioCompleto+"', '"+item.final.replace(item.dominioCompleto, "")+"', '"+item.statusCode+"', '"+item.sucesso+"', '"+item.referer+"', '"+item.siteOriginal+"'\n");
-                    });
-                    console.log("");
-
-                    stream.end();
-
-
-                    if (indice<allSites.length-1)
-                        processaSite(allSites, indice+1);                
+                listaEstendida.forEach(function(item){
+                    stream.write("'"+ item.final.replace(/\/$/, "") + "', '" + item.original +"', '"+item.dominio+"', '"+item.dominioCompleto+"', '"+item.final.replace(item.dominioCompleto, "")+"', '"+item.statusCode+"', '"+item.sucesso+"', '"+item.referer+"', '"+item.siteOriginal+"'\n");
                 });
-            }
-            /*
-            else{
+                console.log("");
+                stream.end();
 
                 if (indice<allSites.length-1)
-                    processaSite(allSites, indice+1);
+                    processaSite(allSites, indice+1);  
                 else
-                    console.log(listaErrosGerais);
-            }*/
+                    integraJsons();
+            });
 
         });
     }
-    else if (indice<allSites.length-1){
-        console.log("SKIPPING " + site);
-        processaSite(allSites, indice+1);
-    }
-    
+    else{
+        if (indice<allSites.length-1){
+            console.log("SKIPPING " + site);
+            processaSite(allSites, indice+1);
+        }
+        else{
+            integraJsons();
+        }
+    }    
 }
 
 function integraJsons(){
-    fs.readdir(__dirname, function (err, files) {
+    fs.readdir(__dirname , function (err, files) {
         //handling error
         if (err) {
             return console.log('Unable to scan directory: ' + err);
         } 
         let arrayFinal = [];
         let urlsFinal = [];
+        let countDescartados = 0;
+        let countTotal = 0;
+        let countAproveitados = 0;
         //listing all files using forEach
         files.forEach(function (file) {
             if (file.includes("urls_")){
-                var tempArray = fs.readFileSync(file).toString().split("\n");
+                var tempArray = fs.readFileSync(path.join(__dirname, file)).toString().split("\n");
                 for(i in tempArray) {
                     let linha = tempArray[i];
-                    let id = /^'http.*?'/.exec(linha);
-                    console.log(id);
-                    if (urlsFinal.includes(id)){
-                        console.log("Já existe");
-                    }
-                    else{
-                        arrayFinal.push(tempArray[i]);
-                        urlsFinal.push(id);
+                    let match = /^'(http[^,]*?)'/.exec(linha);
+                    let id;
+                    if (match){
+                        id = match[1];
+
+                        countTotal++;
+                        console.log(id);
+                        if (urlsFinal.includes(id)){
+                            console.log("Já existe");
+                            countDescartados++;
+                        }
+                        else
+                        {
+                            countAproveitados++;
+                            arrayFinal.push(tempArray[i]);
+                            urlsFinal.push(id);
+                        }
                     }
                 }
             }
         });
+
+        console.log(countTotal);
+        console.log(countAproveitados);
+        console.log(countDescartados);
+
+        fs.writeFileSync(path.join(__dirname, "integrado2.csv"), arrayFinal.join("\n"));
     });
     
 }
 processaSite(allSites, 0);
-integraJsons();
