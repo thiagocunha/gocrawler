@@ -5,7 +5,7 @@ const fs = require('fs');
 var listaNormal = [];
 var listaEstendida = [];
 var listaErrosGerais = [];
-var listaURLsUnicas = [];
+var listaVisitadas = [];
 var listaErro = [];
 const regexFullDomain = /(?:(http.?:\/\/(?:www.)?.*?)(?:\/|"|')|(http.?:\/\/(?:www.)?.*?$))/;
 
@@ -57,7 +57,7 @@ function cachedRequest(options, callback){
  * @param {Array} listaErro 
  * @param {Function} callback 
  */
-function execRequests(r, fulldomain, reqReferer, siteOriginal, body, listaNormal, listaErro, callback){
+function processarLinks(r, fulldomain, reqReferer, siteOriginal, body, listaNormal, listaErro, callback){
     if ((result = r.exec(body)) !== null) {
         // URL com decodificação (algumas URLs vinham com parte codificada)
         let item = decodeURIComponent(result[1]);
@@ -68,24 +68,37 @@ function execRequests(r, fulldomain, reqReferer, siteOriginal, body, listaNormal
         if (item.startsWith("/")){
             item = fulldomain + item;
         }
-        if (item.startsWith("http") &&  !listaNormal.includes(item)&& !listaErro.includes(item)){
 
+        // Se o link parece ser uma URL válida http e não está em uma das listas (requisições falhas ou bem sucedidas)
+        if (item.startsWith("http") && !listaNormal.includes(item)&& !listaErro.includes(item)){
+
+            // Faz a chamada do ciclo recursivo com setTimeout para evitar estouro de pilha
             setTimeout( function() {
-                recReq(item, siteOriginal, reqReferer, listaNormal, listaErro, function(listaNormal, listaErro){
-                    execRequests(r, fulldomain, reqReferer, siteOriginal, body, listaNormal, listaErro, callback);
+                // Dispara a varredura recursiva para o último link encontrado na página atual
+                requisitarPagina(item, siteOriginal, reqReferer, listaNormal, listaErro, function(listaNormal, listaErro){
+                    // Vai para o próximo link desta página
+                    processarLinks(r, fulldomain, reqReferer, siteOriginal, body, listaNormal, listaErro, callback);
                 });            
-            });
+            }, 0);
         }
         else{
-            execRequests(r, fulldomain, reqReferer, siteOriginal, body, listaNormal, listaErro, callback);
+            // Vai para o próximo link desta página
+            processarLinks(r, fulldomain, reqReferer, siteOriginal, body, listaNormal, listaErro, callback);
         }        
         
     }
     else{
+        // Encerrando todos os links da página atual
         callback(listaNormal, listaErro);
     }
 }
 
+/**
+ * Verifica se o conteúdo retornado é de um dos tipos classificados para serem
+ * descartados. Verificação a partir do content type, domínio e extensão.
+ * @param {Object} response Objeto de resposta da requisição web
+ * @param {String} urlFinal URL requisitada 
+ */
 function conteudosDescartados(response, urlFinal){
     if (!response) 
         return false;
@@ -93,58 +106,46 @@ function conteudosDescartados(response, urlFinal){
         return (!(response.headers["content-type"].includes("text")|| response.headers["content-type"].includes("json")) || urlFinal.includes("linkedin.com")  || urlFinal.includes("sharer.php") || urlFinal.includes("twitter.com") || urlFinal.includes("facebook.com") || urlFinal.includes("loja.cocacolabrasil")|| urlFinal.includes("merakettim.coca-colaturkiye.com"))
 }
 
-function recReq(url, siteOriginal, referer, listaNormal, listaErro, cb){
+
+/**
+ * Busca o conteúdo de uma URL e dispara recursivamente o processamento 
+ * de seus links.
+ * @param {String} url Página a ser requisitada 
+ * @param {*} siteOriginal Primeira URL da série recursiva 
+ * @param {*} referer Última página que requisitou a URL atual
+ * @param {*} listaNormal Lista de execuções bem sucedidas
+ * @param {*} listaErro Lista de execuções falhas
+ * @param {*} cb Callback
+ */
+function requisitarPagina(url, siteOriginal, referer, listaNormal, listaErro, cb){
     var options = {
-        uri: url,
-        /*transform: function (body) {
-            return cheerio.load(body);
-        }*/
+        uri: url
     };
     
-    if (url.includes("season05") && url.includes(".ke")){
-        url.toString();
-    }
-
+    // Se a URLs representa um metadado de componente contentwall... 
     if (url.includes("jcr:") && url.includes("contentwall")){
         options.method = "POST";
         options.uri = (regexFullDomain.exec(url)[1]?regexFullDomain.exec(url)[1]:regexFullDomain.exec(url)[2]).replace("http:", "https:") + "/bin/goservices/contentWallServlet";
-                
         options.form = "nodePath="+/(\/content.*$)/.exec(url)[1];//+"&actualAmountOfRSSItems=%5B%5D&sortField=%40cq%3AlastModified&sortOrder=desc";
-        /*postData = {
-            mimeType: 'application/x-www-form-urlencoded',
-            params: [
-              {
-                name: 'nodePath',
-                value: /(\/content.*$)/.exec(url) //'/content/go/coca-cola/AZ/az/bilirsinizmi/jcr:content/pageContent/contentwall_2013369960'
-              },
-              {
-                name: 'actualAmountOfRSSItems',
-                value: []
-              },
-              {
-                name: 'sortField',
-                value: '@cq:lastModified'
-              },
-              {
-                name: 'sortOrder',
-                value: 'desc'
-              }
-            ]
-          }*/
     }
 
+    // Requisição web cacheada da página 
     cachedRequest(options, function (a, response, body){
-        console.log("Url: "+url);
-        //console.log(".");
-        //console.log(response.request.uri.href);
+        // console.log("Url: "+url);
         let urlFinal = url;
+
+        // Recuperação da URL depois dos redirects
         if (response && response.request && response.request.uri && response.request.uri.href)
             urlFinal = response.request.uri.href;
 
+        // Regex para pegar o dominio no formato simples dominio.com.br
         let match = /(?:\/\/(?:www.)?(.*?)(?:\/|"|')|\/\/(?:www.)?(.*?)$)/.exec(url);
+        // Regex para pegar o domínio no formato completo http://www.dominio.com.br
         let matchFull = regexFullDomain.exec(url);
         let domain = "nothing";
         let fulldomain = "nothing";
+
+        // Regex com dois grupos opcionais, por isso as condições abaixo
         if (match[1]){
             domain = match[1]; 
             fulldomain = matchFull[1];
@@ -153,11 +154,10 @@ function recReq(url, siteOriginal, referer, listaNormal, listaErro, cb){
             domain = match[2];
             fulldomain = matchFull[2];
         }
-        
-        //console.log(response.statusCode);
+
+        // Se a requisição falhar ou o conteúdo for descartável
         if (!response || parseInt(response.statusCode) !== 200 || conteudosDescartados(response, urlFinal))
         {
-            //console.log("erro: "+ response.statusCode);
             if (!listaErro.includes(urlFinal)){
                 listaErro.push(urlFinal);        
                 let tempStatus = "";
@@ -180,10 +180,12 @@ function recReq(url, siteOriginal, referer, listaNormal, listaErro, cb){
                     }
                     listaNormal.push(urlFinal);
                     listaEstendida.push({siteOriginal: siteOriginal, referer: referer, original: url, final: urlFinal, dominio: domain, dominioCompleto: fulldomain, statusCode: response.statusCode, sucesso: true});
+                    
+                    // RegExp para listar os links existentes na página
                     let r = new RegExp("(?:\"|')((?:http.{3,4}(?:"+domain+")|\\/)(?:[^.'\",\\s<>])*?(?:.html|\/|(?:[^.'\",\\s<>]{4,})))(?:\"|')", "gm");
         
-                    execRequests(r, fulldomain, urlFinal, siteOriginal, body, listaNormal, listaErro, function(listaNormal, listaErro){
-                        console.log("URL checked");
+                    processarLinks(r, fulldomain, urlFinal, siteOriginal, body, listaNormal, listaErro, function(listaNormal, listaErro){
+                        console.log("URL checked: "+ url);
                         if (cb)
                             cb(listaNormal, listaErro, url);
                     });
@@ -202,13 +204,6 @@ function recReq(url, siteOriginal, referer, listaNormal, listaErro, cb){
     });
 }
 
-//(?:"|')((?:http.*?(?:coca-cola.co.uk)|\/)(?:[^.'",\s<>])*?(?:.html|\/|(?:[^.'",\s<>]{4,})))(?:"|')
-//et domain = "cocacola.co.uk";
-//console.log(decodeURIComponent("http%3A%2F%2Fwww"))
-
-//http://www.fantalatinamerica.com/es/home/
-//https://www.cocacola.co.uk/en/home/
-//https://www.coca-cola.co.th/th/home/
 
 var allSites = ["www.aguamineralcrystal.com.br/pt/home/",
 "www.fuze-tea.com",
@@ -540,7 +535,7 @@ var allSites = ["www.aguamineralcrystal.com.br/pt/home/",
 "www.cappy.com.pk",
 "www.coca-cola.pl/fuzetea",
 "www.coke.at/sprite/de/home/",
-"coke.at/kinley/de/home/",
+"coke.at/kinley/de/home/", 
 "www.coca-cola.co.mz/pt/home/",
 "www.coca-cola.co.ug/en/home/",
 "www.coca-cola.co.ke/en/home/",
@@ -552,17 +547,15 @@ var allSites = ["www.aguamineralcrystal.com.br/pt/home/",
 "www.cocacola-kos.com/sr/home",
 "www.coca-cola.it/smartwater"]
 
-//allSites = ["www.fuze-tea.com"];
-//allSites.forEach(
     
 function processaSite(allSites, indice){
 
-    /*
+    
     listaErro = [];
     listaNormal = [];
     listaEstendida = [];
     listaExecutados = [];
-*/
+
 
     let site = allSites[indice];
     let arqSite = path.join(__dirname, "urls_"+indice+".csv");
@@ -572,23 +565,17 @@ function processaSite(allSites, indice){
         if (!site.includes("http")){
             site = "http://"+site;
         }
-        recReq(site, site, "", listaNormal, listaErro, function (l1, l2, url){
+        requisitarPagina(site, site, "", listaNormal, listaErro, function (l1, l2, url){
             //if (indice>339)
             {
                 var stream = fs.createWriteStream(arqSite);
                 stream.once('open', function(fd) {
                 
                     
-                    console.log("finalizando");
-                    //l1.sort();
-                    //l2.sort();
+                    console.log("finalizando " + indice);
 
                     listaEstendida.forEach(function(item){
                         stream.write("'"+ item.final.replace(/\/$/, "") + "', '" + item.original +"', '"+item.dominio+"', '"+item.dominioCompleto+"', '"+item.final.replace(item.dominioCompleto, "")+"', '"+item.statusCode+"', '"+item.sucesso+"', '"+item.referer+"', '"+item.siteOriginal+"'\n");
-                        //console.log(item);
-                        if (!listaURLsUnicas.includes(item.urlFinal)){
-                            listaURLsUnicas.push(item.urlFinal);
-                        }
                     });
                     console.log("");
 
@@ -599,10 +586,13 @@ function processaSite(allSites, indice){
                         processaSite(allSites, indice+1);                
                 });
             }
-            /*else{
+            /*
+            else{
 
                 if (indice<allSites.length-1)
                     processaSite(allSites, indice+1);
+                else
+                    console.log(listaErrosGerais);
             }*/
 
         });
@@ -614,5 +604,34 @@ function processaSite(allSites, indice){
     
 }
 
+function integraJsons(){
+    fs.readdir(__dirname, function (err, files) {
+        //handling error
+        if (err) {
+            return console.log('Unable to scan directory: ' + err);
+        } 
+        let arrayFinal = [];
+        let urlsFinal = [];
+        //listing all files using forEach
+        files.forEach(function (file) {
+            if (file.includes("urls_")){
+                var tempArray = fs.readFileSync(file).toString().split("\n");
+                for(i in tempArray) {
+                    let linha = tempArray[i];
+                    let id = /^'http.*?'/.exec(linha);
+                    console.log(id);
+                    if (urlsFinal.includes(id)){
+                        console.log("Já existe");
+                    }
+                    else{
+                        arrayFinal.push(tempArray[i]);
+                        urlsFinal.push(id);
+                    }
+                }
+            }
+        });
+    });
+    
+}
 processaSite(allSites, 0);
-//fs.writeFileSync(path.join(__dirname, "urls_unicas.csv"), listaURLsUnicas.join("\n"));
+integraJsons();

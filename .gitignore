@@ -3,5 +3,6 @@ execs
 bkp
 cache
 *.csv
+*.zip
 .~lock.urls.ods#
 .~lock.urls.csv#
